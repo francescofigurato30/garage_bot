@@ -19,6 +19,7 @@ propcache==0.5.4
 psycopg2-binary==2.9.13
 PyJWT==2.15.0
 python-telegram-bot==22.8
+pytz==2026.4
 requests==2.34.2
 sqlparse==0.6.0
 twilio==9.11.1
