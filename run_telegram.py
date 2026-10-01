@@ -13,7 +13,7 @@ from telegram.ext import ApplicationBuilder, ContextTypes, MessageHandler, filte
 from bot.engine import handle_incoming_message
 from bot.models import Deadline
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "INCOLLA_IL_TUO_TOKEN_TELEGRAM_DI_RISERVA")
+BOT_TOKEN = os.getenv("8644857704:AAELOp6ZC5dACla9l_aYxkBhL9wY7UvVuS0")
 
 async def on_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Gestisce i messaggi in arrivo degli utenti."""
