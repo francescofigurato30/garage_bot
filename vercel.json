@@ -1,0 +1,21 @@
+{
+  "version": 2,
+  "builds": [
+    {
+      "src": "config/wsgi.py",
+      "use": "@vercel/python"
+    }
+  ],
+  "routes": [
+    {
+      "src": "/(.*)",
+      "dest": "config/wsgi.py"
+    }
+  ],
+  "crons": [
+    {
+      "path": "/cron/check-deadlines/",
+      "schedule": "0 7 * * *"
+    }
+  ]
+}
