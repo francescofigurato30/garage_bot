@@ -4,7 +4,6 @@ import os
 import traceback
 from datetime import date, timedelta
 import requests
-from django.db.models import Sum
 from django.http import HttpResponse, JsonResponse
 from django.views.decorators.csrf import csrf_exempt
 
@@ -12,14 +11,15 @@ from .models import Deadline, Expense, UserProfile, Vehicle
 
 logger = logging.getLogger(__name__)
 
+# Token con fallback immediato
 TELEGRAM_BOT_TOKEN = os.environ.get(
     "TELEGRAM_BOT_TOKEN", "8644857704:AAELOp6ZC5dACla9I_aYxkBhL9wY7UvVuS0"
-)
+).strip()
 TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
 
 
 def send_message(chat_id, text):
-    """Invia un messaggio di testo a Telegram formattato in HTML."""
+    """Invia un messaggio di testo a Telegram e traccia l'esito nei log."""
     url = f"{TELEGRAM_API_URL}/sendMessage"
     payload = {
         "chat_id": chat_id,
@@ -28,16 +28,23 @@ def send_message(chat_id, text):
     }
     try:
         response = requests.post(url, json=payload, timeout=10)
-        return response.ok
+        print(f"📡 INVIO TELEGRAM -> Chat: {chat_id} | Status: {response.status_code}")
+        if not response.ok:
+            print(f"⚠️ RISPOSTA TELEGRAM KO: {response.text}")
+            # Se fallisce per problemi di formattazione HTML, riprova come testo puro
+            payload.pop("parse_mode", None)
+            retry_res = requests.post(url, json=payload, timeout=10)
+            print(f"📡 RETRY TESTO PURO -> Status: {retry_res.status_code}")
+            return retry_res.ok
+        return True
     except Exception as e:
-        logger.error(f"Errore invio Telegram: {e}")
+        print(f"❌ ECCEZIONE REQUESTS VERSO TELEGRAM: {e}")
         return False
 
 
-def handle_user_command(user, text, chat_id):
-    """Gestisce la logica dei comandi e risponde interrogando Neon DB."""
-    text_clean = text.strip()
-    cmd = text_clean.lower()
+def handle_user_command(user, text):
+    """Elabora il testo ricevuto e interroga il database Neon."""
+    cmd = text.strip().lower()
 
     if cmd == "/start":
         return (
@@ -45,11 +52,11 @@ def handle_user_command(user, text, chat_id):
             "Benvenuto nel tuo <b>Garage Bot H24</b>.\n\n"
             "Comandi disponibili:\n"
             "🚗 <code>garage</code> - Lista veicoli e stato storico\n"
-            "📅 <code>scadenze</code> - Prossime scadenze (bollo, assicurazione, revisione)\n"
-            "💶 <code>spese</code> - Totale spese per veicolo"
+            "📅 <code>scadenze</code> - Scadenze imminenti e da saldare\n"
+            "💶 <code>spese</code> - Riepilogo spese per veicolo"
         )
 
-    elif "garage" in cmd:
+    if "garage" in cmd:
         vehicles = user.vehicles.all()
         if not vehicles.exists():
             return "🚘 Il tuo garage è attualmente vuoto. Nessun veicolo associato."
@@ -63,13 +70,12 @@ def handle_user_command(user, text, chat_id):
             )
         return "\n".join(out)
 
-    elif "scadenze" in cmd:
-        # Prende le scadenze non pagate dei veicoli dell'utente
+    if "scadenze" in cmd:
         deadlines = Deadline.objects.filter(
             vehicle__user=user, is_paid=False
         ).order_by("due_date")
         if not deadlines.exists():
-            return "✅ Ottimo! Non hai scadenze arretrate o imminenti registrate."
+            return "✅ Nessuna scadenza arretrata o da saldare registrata."
 
         out = ["📅 <b>Scadenze da saldare:</b>\n"]
         today = date.today()
@@ -84,14 +90,14 @@ def handle_user_command(user, text, chat_id):
 
             costo = f" (€{d.estimated_cost})" if d.estimated_cost else ""
             out.append(
-                f"• <b>{d.get_deadline_type_display()}</b> {costo} - {d.vehicle.model} ({d.vehicle.plate})\n  {stato}\n"
+                f"• <b>{d.get_deadline_type_display()}</b>{costo} - {d.vehicle.model} ({d.vehicle.plate})\n  {stato}\n"
             )
         return "\n".join(out)
 
-    elif "spese" in cmd:
+    if "spese" in cmd:
         vehicles = user.vehicles.all()
         if not vehicles.exists():
-            return "Nessun veicolo trovato su cui calcolare le spese."
+            return "Nessun veicolo registrato su cui calcolare le spese."
 
         out = ["💶 <b>Riepilogo Spese Garage:</b>\n"]
         totale_globale = 0.0
@@ -103,16 +109,15 @@ def handle_user_command(user, text, chat_id):
         out.append(f"\n<b>Totale complessivo garage:</b> € {totale_globale:.2f}")
         return "\n".join(out)
 
-    else:
-        return (
-            "Comando non riconosciuto.\n"
-            "Scrivi <code>garage</code>, <code>scadenze</code> o <code>spese</code>."
-        )
+    return (
+        f"Comando ricevuto: <i>{text}</i>\n\n"
+        "Comandi disponibili: <code>garage</code>, <code>scadenze</code>, <code>spese</code>."
+    )
 
 
 @csrf_exempt
 def telegram_webhook(request):
-    """Endpoint per Telegram Webhook."""
+    """Endpoint HTTP ricevente per Telegram Webhook."""
     if request.method == "GET":
         return HttpResponse("Telegram Webhook Endpoint Active", status=200)
 
@@ -132,22 +137,24 @@ def telegram_webhook(request):
                 first_name = from_user.get("first_name", "Utente")
                 text = msg.get("text", "")
 
+                print(f"📥 MESSAGGIO RICEVUTO -> Chat: {chat_id} | Testo: {text}")
+
                 if chat_id and text:
-                    # Ottieni o crea il profilo utente su Neon DB
+                    # Ottieni o crea il profilo utente nel DB Neon
                     user_profile, _ = UserProfile.objects.get_or_create(
                         wa_id=user_id_str,
                         defaults={"name": first_name}
                     )
 
-                    # Elabora la risposta interrogando il database
-                    risposta = handle_user_command(user_profile, text, chat_id)
+                    # Elabora ed invia la risposta
+                    risposta = handle_user_command(user_profile, text)
                     send_message(chat_id, risposta)
 
             return JsonResponse({"status": "ok"}, status=200)
 
         except Exception as e:
             print("========================================")
-            print("❌ ERRORE NEL WEBHOOK DI TELEGRAM:")
+            print("❌ ERRORE NEL WEBHOOK TELEGRAM:")
             print(traceback.format_exc())
             print("========================================")
             return JsonResponse({"status": "error", "message": str(e)}, status=200)
@@ -157,12 +164,11 @@ def telegram_webhook(request):
 
 @csrf_exempt
 def vercel_cron_check_deadlines(request):
-    """Endpoint per il controllo automatico notturno delle scadenze via Vercel Cron."""
+    """Endpoint chiamato da Vercel Cron per notificare le scadenze imminenti."""
     try:
         today = date.today()
         avviso_limite = today + timedelta(days=7)
 
-        # Cerca scadenze nei prossimi 7 giorni non pagate
         upcoming = Deadline.objects.filter(
             is_paid=False, due_date__range=[today, avviso_limite]
         ).select_related("vehicle", "vehicle__user")
@@ -170,7 +176,7 @@ def vercel_cron_check_deadlines(request):
         for d in upcoming:
             chat_id = d.vehicle.user.wa_id
             msg = (
-                f"🔔 <b>Promemoria Scadenza Imminente!</b>\n\n"
+                f"🔔 <b>Promemoria Scadenza!</b>\n\n"
                 f"Veicolo: <b>{d.vehicle.model}</b> ({d.vehicle.plate})\n"
                 f"Tipo: {d.get_deadline_type_display()}\n"
                 f"Data: {d.due_date.strftime('%d/%m/%Y')}"
