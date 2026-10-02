@@ -10,7 +10,7 @@ class Command(BaseCommand):
 
     def handle(self, *args, **options):
         # 1. Recupera il token dalla variabile d'ambiente corretta
-        bot_token = os.getenv("8644857704:AAELOp6ZC5dACla9l_aYxkBhL9wY7UvVuS0")
+        bot_token = os.getenv("8644857704:AAELOp6ZC5dACla9I_aYxkBhL9wY7UvVuS0")
         if not bot_token:
             self.stdout.write(self.style.ERROR("ERRORE: TELEGRAM_BOT_TOKEN non trovato nelle variabili d'ambiente."))
             return

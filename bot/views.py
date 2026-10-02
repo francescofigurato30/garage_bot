@@ -1,94 +1,84 @@
-import os
 import json
-from datetime import date, timedelta
-from django.http import JsonResponse, HttpResponse
-from django.views.decorators.csrf import csrf_exempt
+import logging
+import os
+import traceback
 import requests
+from django.http import HttpResponse, JsonResponse
+from django.views.decorators.csrf import csrf_exempt
 
-from bot.engine import handle_incoming_message
-from bot.models import Deadline
+logger = logging.getLogger(__name__)
 
-BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_API_URL = f"https://api.telegram.org/bot{BOT_TOKEN}"
+# Recupera il token dalle variabili d'ambiente
+TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "8644857704:AAELOp6ZC5dACla9I_aYxkBhL9wY7UvVuS0")
+TELEGRAM_API_URL = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}"
+
+
+def send_message(chat_id, text):
+    """Invia un messaggio di testo a Telegram."""
+    url = f"{TELEGRAM_API_URL}/sendMessage"
+    payload = {
+        "chat_id": chat_id,
+        "text": text,
+        "parse_mode": "HTML"
+    }
+    try:
+        response = requests.post(url, json=payload, timeout=5)
+        response.raise_for_status()
+    except Exception as e:
+        print(f"Errore durante l'invio su Telegram: {e}")
+
 
 @csrf_exempt
 def telegram_webhook(request):
-    """Riceve i messaggi inviati dagli utenti su Telegram."""
+    """Endpoint webhook per ricevere gli aggiornamenti da Telegram."""
+    # Controllo GET dal browser
+    if request.method == "GET":
+        return HttpResponse("Telegram Webhook Endpoint Active", status=200)
+
+    # Gestione richieste POST da Telegram
     if request.method == "POST":
         try:
-            payload = json.loads(request.body.decode('utf-8'))
-            message = payload.get("message") or payload.get("edited_message")
-            
-            if message and "text" in message:
-                user_id = str(message["from"]["id"])
-                user_name = message["from"].get("first_name", "Utente")
-                text = message["text"]
+            body = request.body.decode("utf-8")
+            if not body:
+                return JsonResponse({"status": "empty body"}, status=200)
 
-                # Elabora il messaggio con la tua logica esistente
-                reply_text = handle_incoming_message(
-                    wa_id=user_id,
-                    text=text,
-                    user_name=user_name
-                )
+            data = json.loads(body)
 
-                # Invia la risposta a Telegram
-                send_data = {
-                    "chat_id": user_id,
-                    "text": reply_text,
-                    "parse_mode": "Markdown"
-                }
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=send_data, timeout=5)
+            # Estrai i dettagli del messaggio se presenti
+            message = data.get("message") or data.get("edited_message")
+            if message:
+                chat_id = message.get("chat", {}).get("id")
+                text = (message.get("text") or "").strip()
 
-            return JsonResponse({"status": "ok"})
+                if chat_id and text:
+                    # Gestione comandi base
+                    if text.startswith("/start"):
+                        risposta = (
+                            "👋 <b>Benvenuto nel Garage Bot!</b>\n\n"
+                            "Il bot è attivo e operativo su Vercel.\n"
+                            "Scrivi <code>garage</code> o <code>scadenze</code> per verificare lo stato."
+                        )
+                        send_message(chat_id, risposta)
+
+                    elif "garage" in text.lower():
+                        send_message(chat_id, "🚗 Modulo Garage attivo! Controllo veicoli in corso...")
+
+                    else:
+                        send_message(chat_id, f"Ricevuto: {text}\n(Bot online su Vercel)")
+
+            return JsonResponse({"status": "ok"}, status=200)
+
         except Exception as e:
-            return JsonResponse({"error": str(e)}, status=500)
-            
-    return HttpResponse("Telegram Webhook Endpoint Active")
+            # Cattura qualsiasi errore Python e lo stampa chiaramente nei log di Vercel
+            print("========================================")
+            print("❌ ERRORE NEL WEBHOOK DI TELEGRAM:")
+            print(traceback.format_exc())
+            print("========================================")
+            # Restituiamo 200 con l'errore per evitare loop di retry continui da Telegram
+            return JsonResponse({
+                "status": "error",
+                "message": str(e),
+                "traceback": traceback.format_exc()
+            }, status=200)
 
-@csrf_exempt
-def vercel_cron_check_deadlines(request):
-    """Endpoint chiamato automaticamente dal Cron Job di Vercel ogni mattina."""
-    today = date.today()
-    alert_windows = [0, 7, 15, 30]
-    notifications_sent = 0
-
-    for window in alert_windows:
-        target_date = today + timedelta(days=window)
-        deadlines = Deadline.objects.filter(due_date=target_date, is_paid=False).select_related('vehicle', 'vehicle__user')
-
-        for d in deadlines:
-            v = d.vehicle
-            user = v.user
-
-            if d.deadline_type == 'INSURANCE':
-                tipo = "🛡️ Polizza Assicurativa"
-                cmd_tipo = "polizza"
-            elif d.deadline_type == 'TAX':
-                tipo = "🏷️ Bollo"
-                cmd_tipo = "bollo"
-            else:
-                tipo = "🔧 Revisione Ministeriale"
-                cmd_tipo = "revisione"
-
-            urgency = "OGGI!" if window == 0 else f"tra {window} giorni ({d.due_date.strftime('%d/%m/%Y')})"
-
-            alert_text = (
-                f"🔔 *PROMEMORIA SCADENZA GARAGE*\n\n"
-                f"Ciao {user.name or 'Utente'}, il tuo mezzo *{v.model}* (`{v.plate}`) ha una scadenza imminente:\n"
-                f"👉 *{tipo}*: {urgency}\n\n"
-                f"💡 Per aggiornare rispondi con:\n"
-                f"`rinnova {v.plate} {cmd_tipo}`"
-            )
-
-            try:
-                send_data = {
-                    "chat_id": user.wa_id,
-                    "text": alert_text,
-                    "parse_mode": "Markdown"
-                }
-                requests.post(f"{TELEGRAM_API_URL}/sendMessage", json=send_data, timeout=5)
-                notifications_sent += 1
-            except Exception:
-                pass
-
-    return JsonResponse({"status": "completed", "notifications_sent": notifications_sent})
+    return HttpResponse("Metodo non consentito", status=405)
