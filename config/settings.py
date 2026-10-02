@@ -76,12 +76,14 @@ WSGI_APPLICATION = 'config.wsgi.application'
 
 DATABASES = {
     'default': dj_database_url.config(
-        default='postgresql://neondb_owner:npg_sZj3fRzulEQ8@ep-lively-pine-b4vj8qxa.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require',
-        conn_max_age=600,
+        default=os.environ.get(
+            'DATABASE_URL',
+            'postgresql://neondb_owner:npg_sZj3fRzulEQ8@ep-lively-pine-b4vj8qxa.c-6.us-east-2.aws.neon.tech/neondb?sslmode=require'
+        ),
+        conn_max_age=0,
         ssl_require=True
     )
 }
-
 
 # Password validation
 # https://docs.djangoproject.com/en/6.1/ref/settings/#auth-password-validators
